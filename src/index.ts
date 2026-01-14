@@ -40,6 +40,9 @@ import { handleClientRequestError } from './utils/dynatrace-connection-utils';
 import { configureProxyFromEnvironment } from './utils/proxy-config';
 import { listExceptions } from './capabilities/list-exceptions';
 import { createDynatraceNotebook } from './capabilities/notebooks';
+import { listNotebooks } from './capabilities/list-notebooks';
+import { getNotebook } from './capabilities/get-notebook';
+import { searchNotebooks } from './capabilities/search-notebooks';
 
 const DT_MCP_AUTH_CODE_FLOW_OAUTH_CLIENT_ID = 'dt0s12.local-dt-mcp-server';
 
@@ -1433,6 +1436,203 @@ You can now execute new Grail queries (DQL, etc.) again. If this happens more of
   );
 
   // Document Management Tools
+
+  tool(
+    'list_notebooks',
+    'List Notebooks',
+    'List all notebooks from the Dynatrace environment. Returns notebook metadata including IDs, names, and descriptions.',
+    {
+      filter: z
+        .string()
+        .optional()
+        .describe(
+          "Optional DQL-style filter to apply when listing notebooks. Example: name='MyNotebook' or name contains 'test'",
+        ),
+    },
+    {
+      readOnlyHint: true,
+    },
+    async ({ filter }) => {
+      await createAuthenticatedHttpClient(scopesBase.concat('document:documents:read'));
+
+      try {
+        const result = await listNotebooks(filter);
+
+        if (!result.documents || result.documents.length === 0) {
+          return 'No notebooks found in the environment.';
+        }
+
+        let resp = `Found ${result.documents.length} notebook(s):\n\n`;
+        result.documents.forEach((notebook: any) => {
+          resp += `**${notebook.name}**\n`;
+          resp += `ID: ${notebook.id}\n`;
+          resp += `Type: ${notebook.type}\n`;
+          if (notebook.description) {
+            resp += `Description: ${notebook.description}\n`;
+          }
+          resp += `Owner: ${notebook.owner || 'N/A'}\n`;
+          resp += `Created: ${notebook.modificationInfo?.createdTime ? new Date(notebook.modificationInfo.createdTime).toISOString() : 'N/A'}\n`;
+          resp += `Modified: ${notebook.modificationInfo?.lastModifiedTime ? new Date(notebook.modificationInfo.lastModifiedTime).toISOString() : 'N/A'}\n`;
+          resp += `Version: ${notebook.version || 'N/A'}\n`;
+          resp += `Link: ${dtEnvironment}/ui/apps/dynatrace.notebooks/notebooks/${notebook.id}\n`;
+          resp += '\n';
+        });
+
+        resp += '\n**Next Steps:**\n';
+        resp +=
+          '1. Use the "get_notebook" tool with a notebook ID to retrieve the full content of a specific notebook.\n';
+        resp += '2. Use the "create_dynatrace_notebook" tool to create a new notebook.\n';
+
+        return resp;
+      } catch (error: any) {
+        return `Error listing notebooks: ${error.message}`;
+      }
+    },
+  );
+
+  tool(
+    'search_notebooks',
+    'Search Notebooks',
+    'Search for notebooks using text search, owner, date ranges, and sorting. More user-friendly than list_notebooks for finding specific notebooks.',
+    {
+      searchText: z
+        .string()
+        .optional()
+        .describe(
+          'Search text to find in notebook names (case insensitive). Example: "performance" or "error analysis"',
+        ),
+      owner: z.string().optional().describe('Filter by notebook owner (user ID)'),
+      createdAfter: z
+        .string()
+        .optional()
+        .describe('Filter notebooks created after this date (ISO 8601 format, e.g., "2024-01-01T00:00:00.000Z")'),
+      createdBefore: z.string().optional().describe('Filter notebooks created before this date (ISO 8601 format)'),
+      modifiedAfter: z.string().optional().describe('Filter notebooks modified after this date (ISO 8601 format)'),
+      modifiedBefore: z.string().optional().describe('Filter notebooks modified before this date (ISO 8601 format)'),
+      sortBy: z
+        .string()
+        .optional()
+        .describe(
+          'Sort results by field. Examples: "name", "-name" (descending), "modificationInfo.lastModifiedTime", "-modificationInfo.createdTime". Default: newest first',
+        ),
+      pageSize: z.number().optional().default(50).describe('Maximum number of results to return (1-1000). Default: 50'),
+    },
+    {
+      readOnlyHint: true,
+    },
+    async ({ searchText, owner, createdAfter, createdBefore, modifiedAfter, modifiedBefore, sortBy, pageSize }) => {
+      await createAuthenticatedHttpClient(scopesBase.concat('document:documents:read'));
+
+      try {
+        const result = await searchNotebooks({
+          searchText,
+          owner,
+          createdAfter,
+          createdBefore,
+          modifiedAfter,
+          modifiedBefore,
+          sortBy,
+          pageSize,
+        });
+
+        if (!result.documents || result.documents.length === 0) {
+          return 'No notebooks found matching the search criteria.';
+        }
+
+        let resp = `Found ${result.documents.length} notebook(s) matching your search`;
+        if (result.totalCount > result.documents.length) {
+          resp += ` (showing ${result.documents.length} of ${result.totalCount} total)`;
+        }
+        resp += ':\n\n';
+
+        result.documents.forEach((notebook: any) => {
+          resp += `**${notebook.name}**\n`;
+          resp += `ID: ${notebook.id}\n`;
+          if (notebook.description) {
+            resp += `Description: ${notebook.description}\n`;
+          }
+          resp += `Owner: ${notebook.owner || 'N/A'}\n`;
+          resp += `Created: ${notebook.modificationInfo?.createdTime ? new Date(notebook.modificationInfo.createdTime).toISOString() : 'N/A'}\n`;
+          resp += `Modified: ${notebook.modificationInfo?.lastModifiedTime ? new Date(notebook.modificationInfo.lastModifiedTime).toISOString() : 'N/A'}\n`;
+          resp += `Version: ${notebook.version || 'N/A'}\n`;
+          resp += `Link: ${dtEnvironment}/ui/apps/dynatrace.notebooks/notebooks/${notebook.id}\n`;
+          resp += '\n';
+        });
+
+        resp += '\n**Next Steps:**\n';
+        resp += '1. Use the "get_notebook" tool with a notebook ID to retrieve the full content.\n';
+        resp += '2. Refine your search by adding more filters or adjusting the date range.\n';
+        if (result.totalCount > result.documents.length) {
+          resp += `3. Increase pageSize or use pagination to see more of the ${result.totalCount} total results.\n`;
+        }
+
+        return resp;
+      } catch (error: any) {
+        return `Error searching notebooks: ${error.message}`;
+      }
+    },
+  );
+
+  tool(
+    'get_notebook',
+    'Get Notebook',
+    'Retrieve the full content of a specific notebook by its ID. Returns the complete notebook structure including all sections and their content.',
+    {
+      notebookId: z.string().describe('The unique identifier (ID) of the notebook to retrieve'),
+    },
+    {
+      readOnlyHint: true,
+    },
+    async ({ notebookId }) => {
+      await createAuthenticatedHttpClient(scopesBase.concat('document:documents:read'));
+
+      try {
+        const result = await getNotebook(notebookId);
+
+        let resp = `**Notebook: ${result.metadata?.name}**\n\n`;
+        resp += `ID: ${result.metadata?.id}\n`;
+        resp += `Type: ${result.metadata?.type}\n`;
+        if (result.metadata?.description) {
+          resp += `Description: ${result.metadata.description}\n`;
+        }
+        resp += `Created: ${result.metadata?.modificationInfo?.createdTime ? new Date(result.metadata.modificationInfo.createdTime).toISOString() : 'N/A'}\n`;
+        resp += `Modified: ${result.metadata?.modificationInfo?.lastModifiedTime ? new Date(result.metadata.modificationInfo.lastModifiedTime).toISOString() : 'N/A'}\n`;
+        resp += `Version: ${result.metadata?.version || 'N/A'}\n`;
+        resp += `Owner: ${result.metadata?.owner || 'N/A'}\n`;
+        resp += `Link: ${dtEnvironment}/ui/apps/dynatrace.notebooks/notebooks/${result.metadata?.id}\n\n`;
+
+        resp += `**Content:**\n`;
+        resp += '```json\n';
+        // Parse the binary content if it's a buffer/binary
+        if (result.content) {
+          try {
+            let contentStr: string;
+            if (typeof result.content === 'object' && 'toString' in result.content) {
+              contentStr = result.content.toString();
+            } else {
+              contentStr = String(result.content);
+            }
+            const contentJson = JSON.parse(contentStr);
+            resp += JSON.stringify(contentJson, null, 2);
+          } catch {
+            resp += String(result.content);
+          }
+        } else {
+          resp += 'No content available';
+        }
+        resp += '\n```\n\n';
+
+        resp += '\n**Next Steps:**\n';
+        resp += '1. Analyze the notebook content structure to understand its sections and data sources.\n';
+        resp += '2. Use the "execute_dql" tool to run any DQL queries found in the notebook sections.\n';
+        resp += `3. Visit ${dtEnvironment}/ui/apps/dynatrace.notebooks/notebooks/${result.metadata?.id} to view the notebook in the UI.\n`;
+
+        return resp;
+      } catch (error: any) {
+        return `Error retrieving notebook: ${error.message}`;
+      }
+    },
+  );
 
   tool(
     'create_dynatrace_notebook',
